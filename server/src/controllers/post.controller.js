@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Post from '../models/Post.js';
 import Community from '../models/Community.js';
 import { applyVote, currentVoteState } from '../utils/vote.js';
+import { updateHotFeed } from '../utils/updateHotFeed.js';
 
 
 export const createPost = async (req, res, next) => {
@@ -37,6 +38,9 @@ export const createPost = async (req, res, next) => {
 		const populatedPost = await Post.findById(post._id)
 			.populate('author', 'username avatar')
 			.populate('community', 'name slug');
+
+		// Fire-and-forget: seed the hot feed with this new post (score=0, pure time-based)
+		updateHotFeed(post._id, 0, post.createdAt, community.slug);
 
 		return res.status(201).json(populatedPost);
 	} catch (err) {
@@ -232,6 +236,17 @@ export const voteOnPost = async (req, res, next) => {
 			error.status = 404;
 			return next(error);
 		}
+
+		// Fire-and-forget: update hot feed sorted sets in Redis.
+		// `updated` from applyVote's findByIdAndUpdate already carries createdAt
+		// and community (ObjectId) — no need to re-fetch the Post.
+		Community.findById(updated.community).select('slug').lean().then((comm) => {
+			if (comm?.slug) {
+				updateHotFeed(id, updated.score, updated.createdAt, comm.slug);
+			}
+		}).catch((err) => {
+			console.error('Hot feed community lookup failed (non-fatal):', err.message);
+		});
 
 		return res.status(200).json({
 			upvotes: updated.upvotes,
