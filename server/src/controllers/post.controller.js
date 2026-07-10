@@ -3,6 +3,7 @@ import Post from '../models/Post.js';
 import Community from '../models/Community.js';
 import { applyVote, currentVoteState } from '../utils/vote.js';
 import { updateHotFeed } from '../utils/updateHotFeed.js';
+import redis from '../config/redis.js';
 
 
 export const createPost = async (req, res, next) => {
@@ -50,44 +51,133 @@ export const createPost = async (req, res, next) => {
 
 export const getPosts = async (req, res, next) => {
 	try {
-		const { community: communitySlug, limit: limitQuery, cursor } = req.query;
+		const {
+			community: communitySlug,
+			limit: limitQuery,
+			cursor,
+			sort = 'new',
+		} = req.query;
 		const limit = parseInt(limitQuery, 10) || 10;
 
-		const query = {};
-
+		// Resolve community ObjectId if filtered by slug
+		let communityDoc = null;
 		if (communitySlug) {
-			const community = await Community.findOne({ slug: communitySlug });
-			if (!community) {
+			communityDoc = await Community.findOne({ slug: communitySlug });
+			if (!communityDoc) {
 				return res.status(200).json({ posts: [], nextCursor: null });
 			}
-			query.community = community._id;
 		}
 
-		if (cursor) {
-			query.createdAt = { $lt: new Date(cursor) };
+		// ── sort=new (unchanged from Week 2) ──
+		if (sort === 'new') {
+			const query = {};
+			if (communityDoc) query.community = communityDoc._id;
+			if (cursor) query.createdAt = { $lt: new Date(cursor) };
+
+			const posts = await Post.find(query)
+				.sort({ createdAt: -1 })
+				.limit(limit + 1)
+				.populate('author', 'username avatar karma')
+				.populate('community', 'name slug');
+
+			let nextCursor = null;
+			if (posts.length > limit) {
+				nextCursor = posts[limit - 1].createdAt.toISOString();
+			}
+
+			const results = posts.length > limit ? posts.slice(0, limit) : posts;
+			return res.status(200).json({ posts: results, nextCursor });
 		}
 
-		// Fetch limit + 1 posts
-		const posts = await Post.find(query)
-			.sort({ createdAt: -1 })
-			.limit(limit + 1)
-			.populate('author', 'username avatar karma')
-			.populate('community', 'name slug');
+		// ── sort=hot ──
+		if (sort === 'hot') {
+			const offset = parseInt(cursor, 10) || 0;
 
-		let hasNextPage = false;
-		let nextCursor = null;
+			// Try Redis first
+			if (redis.status === 'ready') {
+				try {
+					const key = communitySlug
+						? `feed:hot:community:${communitySlug}`
+						: 'feed:hot:global';
 
-		if (posts.length > limit) {
-			hasNextPage = true;
-			nextCursor = posts[limit - 1].createdAt.toISOString();
+					// ZREVRANGE: highest score first; fetch limit+1 to detect next page
+					const ids = await redis.zrevrange(key, offset, offset + limit);
+
+					if (ids.length === 0) {
+						return res.status(200).json({ posts: [], nextCursor: null });
+					}
+
+					const hasNextPage = ids.length > limit;
+					const pageIds = hasNextPage ? ids.slice(0, limit) : ids;
+
+					// Fetch full documents from Mongo
+					const posts = await Post.find({ _id: { $in: pageIds } })
+						.populate('author', 'username avatar karma')
+						.populate('community', 'name slug');
+
+					// Re-sort to match Redis's rank order (Mongo $in doesn't preserve order)
+					const order = new Map(pageIds.map((id, i) => [id, i]));
+					posts.sort((a, b) => order.get(a._id.toString()) - order.get(b._id.toString()));
+
+					const nextCursor = hasNextPage ? String(offset + limit) : null;
+					return res.status(200).json({ posts, nextCursor });
+				} catch (redisErr) {
+					console.error('Redis hot feed read failed, falling back to Mongo:', redisErr.message);
+					// Fall through to Mongo aggregation below
+				}
+			}
+
+			// Fallback: approximate hot ranking directly in Mongo when Redis is down
+			const matchStage = {};
+			if (communityDoc) matchStage.community = communityDoc._id;
+
+			const pipeline = [
+				{ $match: matchStage },
+				{ $addFields: {
+					ageInHours: { $divide: [{ $subtract: [new Date(), '$createdAt'] }, 3600000] },
+				}},
+				{ $addFields: {
+					// sign(score): 1 if positive, -1 if negative, 0 if zero
+					scoreSign: { $cond: [
+						{ $gt: ['$score', 0] }, 1,
+						{ $cond: [{ $lt: ['$score', 0] }, -1, 0] },
+					]},
+				}},
+				{ $addFields: {
+					hotScoreApprox: { $subtract: [
+						{ $multiply: [
+							'$scoreSign',
+							{ $log10: { $max: [{ $abs: '$score' }, 1] } },
+						]},
+						{ $divide: ['$ageInHours', 12.5] },
+					]},
+				}},
+				{ $sort: { hotScoreApprox: -1 } },
+				{ $skip: offset },
+				{ $limit: limit + 1 },
+			];
+
+			const rawPosts = await Post.aggregate(pipeline);
+
+			const hasNextPage = rawPosts.length > limit;
+			const pageRaw = hasNextPage ? rawPosts.slice(0, limit) : rawPosts;
+
+			// Aggregate returns plain objects — populate via a second query
+			const postIds = pageRaw.map((p) => p._id);
+			const posts = await Post.find({ _id: { $in: postIds } })
+				.populate('author', 'username avatar karma')
+				.populate('community', 'name slug');
+
+			// Preserve aggregation sort order
+			const order = new Map(postIds.map((id, i) => [id.toString(), i]));
+			posts.sort((a, b) => order.get(a._id.toString()) - order.get(b._id.toString()));
+
+			const nextCursor = hasNextPage ? String(offset + limit) : null;
+			return res.status(200).json({ posts, nextCursor });
 		}
 
-		const results = hasNextPage ? posts.slice(0, limit) : posts;
-
-		return res.status(200).json({
-			posts: results,
-			nextCursor,
-		});
+		// Unknown sort value — fall back to new
+		return res.status(400).json({ message: "sort must be 'new' or 'hot'" });
 	} catch (err) {
 		return next(err);
 	}
