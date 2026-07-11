@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../lib/axios';
 import PostCard from '../components/PostCard';
+import FeedSortTabs from '../components/FeedSortTabs';
 
 export default function CommunityPage() {
 	const { slug } = useParams();
@@ -15,16 +16,19 @@ export default function CommunityPage() {
 	const [actionLoading, setActionLoading] = useState(false);
 	const [error, setError] = useState('');
 
+	// Feed state
+	const [sort, setSort] = useState('hot');
+	const [windowState, setWindowState] = useState('all');
+	const [cursor, setCursor] = useState(null);
+	const [hasNextPage, setHasNextPage] = useState(false);
+	const [loadingMore, setLoadingMore] = useState(false);
+
 	const fetchCommunityData = async () => {
 		try {
 			setError('');
 			// Fetch community details
 			const commRes = await api.get(`/communities/${slug}`);
 			setCommunity(commRes.data);
-
-			// Fetch posts for this community
-			const postsRes = await api.get(`/posts?community=${slug}&limit=50`);
-			setPosts(postsRes.data.posts);
 		} catch (err) {
 			console.error(err);
 			setError(err.response?.data?.message || 'Failed to load community details.');
@@ -33,9 +37,48 @@ export default function CommunityPage() {
 		}
 	};
 
+	const fetchPosts = async (reset = false) => {
+		try {
+			const currentCursor = reset ? null : cursor;
+			let url = `/posts?community=${slug}&limit=10&sort=${sort}`;
+			if (sort === 'top' && windowState) {
+				url += `&window=${windowState}`;
+			}
+			if (currentCursor) {
+				url += `&cursor=${encodeURIComponent(currentCursor)}`;
+			}
+
+			const postsRes = await api.get(url);
+			
+			if (reset) {
+				setPosts(postsRes.data.posts);
+			} else {
+				setPosts((prev) => [...prev, ...postsRes.data.posts]);
+			}
+			setCursor(postsRes.data.nextCursor);
+			setHasNextPage(!!postsRes.data.nextCursor);
+		} catch (err) {
+			console.error('Failed to load posts:', err);
+		}
+	};
+
 	useEffect(() => {
 		fetchCommunityData();
 	}, [slug]);
+
+	useEffect(() => {
+		// Fetch posts initially or when sort/window changes
+		setPosts([]);
+		setCursor(null);
+		fetchPosts(true);
+	}, [slug, sort, windowState]);
+
+	const loadMore = async () => {
+		if (loadingMore || !hasNextPage) return;
+		setLoadingMore(true);
+		await fetchPosts(false);
+		setLoadingMore(false);
+	};
 
 	const handleJoinLeave = async () => {
 		if (!user) {
@@ -200,6 +243,15 @@ export default function CommunityPage() {
 						<h2 style={{ fontSize: '1.5rem', fontWeight: '700' }}>Community Posts</h2>
 					</div>
 
+					<FeedSortTabs
+						sort={sort}
+						window={windowState}
+						onChange={(state) => {
+							setSort(state.sort);
+							if (state.window !== undefined) setWindowState(state.window);
+						}}
+					/>
+
 					{posts.length === 0 ? (
 						<div
 							className="glass"
@@ -227,6 +279,17 @@ export default function CommunityPage() {
 							{posts.map((post) => (
 								<PostCard key={post._id} post={post} />
 							))}
+							
+							{hasNextPage && (
+								<button
+									onClick={loadMore}
+									disabled={loadingMore}
+									className="btn btn-secondary"
+									style={{ width: '100%', marginTop: '1rem' }}
+								>
+									{loadingMore ? 'Loading...' : 'Load More'}
+								</button>
+							)}
 						</div>
 					)}
 				</div>

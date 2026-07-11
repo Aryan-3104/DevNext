@@ -2,11 +2,21 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../lib/axios';
+import PostCard from '../components/PostCard';
+import FeedSortTabs from '../components/FeedSortTabs';
 
 export default function HomePage() {
   const { user, token, setAuth, logout } = useAuthStore();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(!user && !!token);
+
+  // Feed state
+  const [posts, setPosts] = useState([]);
+  const [sort, setSort] = useState('hot');
+  const [windowState, setWindowState] = useState('all');
+  const [cursor, setCursor] = useState(null);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -31,6 +41,45 @@ export default function HomePage() {
 
     fetchMe();
   }, [token, user, navigate, setAuth, logout]);
+
+  const fetchPosts = async (reset = false) => {
+    try {
+      const currentCursor = reset ? null : cursor;
+      let url = `/posts?limit=10&sort=${sort}`;
+      if (sort === 'top' && windowState) {
+        url += `&window=${windowState}`;
+      }
+      if (currentCursor) {
+        url += `&cursor=${encodeURIComponent(currentCursor)}`;
+      }
+
+      const postsRes = await api.get(url);
+      
+      if (reset) {
+        setPosts(postsRes.data.posts);
+      } else {
+        setPosts((prev) => [...prev, ...postsRes.data.posts]);
+      }
+      setCursor(postsRes.data.nextCursor);
+      setHasNextPage(!!postsRes.data.nextCursor);
+    } catch (err) {
+      console.error('Failed to load posts:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    setPosts([]);
+    setCursor(null);
+    fetchPosts(true);
+  }, [user, sort, windowState]);
+
+  const loadMore = async () => {
+    if (loadingMore || !hasNextPage) return;
+    setLoadingMore(true);
+    await fetchPosts(false);
+    setLoadingMore(false);
+  };
 
   if (loading) {
     return (
@@ -105,6 +154,50 @@ export default function HomePage() {
             Sign Out
           </button>
         </div>
+      </div>
+
+      <div style={{ width: '100%', maxWidth: '800px', marginTop: '3rem', textAlign: 'left' }}>
+        <h2 style={{ fontSize: '1.5rem', fontWeight: '700', marginBottom: '1.5rem' }}>Global Feed</h2>
+        
+        <FeedSortTabs
+          sort={sort}
+          window={windowState}
+          onChange={(state) => {
+            setSort(state.sort);
+            if (state.window !== undefined) setWindowState(state.window);
+          }}
+        />
+
+        {posts.length === 0 ? (
+          <div
+            className="glass"
+            style={{
+              padding: '4rem 2rem',
+              borderRadius: '16px',
+              textAlign: 'center',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <p style={{ fontSize: '1.05rem' }}>No posts available in this feed.</p>
+          </div>
+        ) : (
+          <div className="posts-feed">
+            {posts.map((post) => (
+              <PostCard key={post._id} post={post} />
+            ))}
+            
+            {hasNextPage && (
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="btn btn-secondary"
+                style={{ width: '100%', marginTop: '1rem' }}
+              >
+                {loadingMore ? 'Loading...' : 'Load More'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

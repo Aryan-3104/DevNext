@@ -56,6 +56,7 @@ export const getPosts = async (req, res, next) => {
 			limit: limitQuery,
 			cursor,
 			sort = 'new',
+			window: windowParam = 'all',
 		} = req.query;
 		const limit = parseInt(limitQuery, 10) || 10;
 
@@ -176,8 +177,46 @@ export const getPosts = async (req, res, next) => {
 			return res.status(200).json({ posts, nextCursor });
 		}
 
-		// Unknown sort value — fall back to new
-		return res.status(400).json({ message: "sort must be 'new' or 'hot'" });
+		// ── sort=top (time-windowed, cursor on score) ──
+		if (sort === 'top') {
+			// Compute windowStart based on window param
+			const windowMs = {
+				day:   24 * 60 * 60 * 1000,
+				week:  7 * 24 * 60 * 60 * 1000,
+				month: 30 * 24 * 60 * 60 * 1000,
+				year:  365 * 24 * 60 * 60 * 1000,
+			};
+
+			const query = {};
+			if (communityDoc) query.community = communityDoc._id;
+
+			// Apply time window filter (skip entirely for 'all')
+			if (windowParam !== 'all' && windowMs[windowParam]) {
+				query.createdAt = { $gte: new Date(Date.now() - windowMs[windowParam]) };
+			}
+
+			// Cursor = score value from previous page's last post
+			if (cursor !== undefined && cursor !== null && cursor !== '') {
+				query.score = { $lt: parseFloat(cursor) };
+			}
+
+			const posts = await Post.find(query)
+				.sort({ score: -1 })
+				.limit(limit + 1)
+				.populate('author', 'username avatar karma')
+				.populate('community', 'name slug');
+
+			let nextCursor = null;
+			if (posts.length > limit) {
+				nextCursor = String(posts[limit - 1].score);
+			}
+
+			const results = posts.length > limit ? posts.slice(0, limit) : posts;
+			return res.status(200).json({ posts: results, nextCursor });
+		}
+
+		// Unknown sort value
+		return res.status(400).json({ message: "sort must be 'new', 'hot', or 'top'" });
 	} catch (err) {
 		return next(err);
 	}
