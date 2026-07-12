@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import NotificationBell from './NotificationBell';
 
 export default function Navbar() {
   const { user, logout } = useAuthStore();
@@ -42,6 +43,7 @@ export default function Navbar() {
         )}
         {user ? (
           <div className="nav-user">
+            <NotificationBell />
             {user.avatar ? (
               <img
                 src={user.avatar}

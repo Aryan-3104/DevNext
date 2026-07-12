@@ -1,13 +1,15 @@
 import { Router } from 'express';
 import passport from 'passport';
 import jwt from 'jsonwebtoken';
-import { login, register } from '../controllers/auth.controller.js';
+import { login, register, getCurrentUser } from '../controllers/auth.controller.js';
+import { protect } from '../middleware/auth.js';
 
 const router = Router();
 
 // ── Local auth ────────────────────────────────────────────────
 router.post('/register', register);
 router.post('/login', login);
+router.get('/me', protect, getCurrentUser);
 
 // ── GitHub OAuth ──────────────────────────────────────────────
 

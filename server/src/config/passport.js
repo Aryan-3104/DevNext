@@ -32,6 +32,32 @@ passport.use(
 					githubUsername: profile.username,
 				});
 
+				// Fetch top 5 GitHub repos by stars and save them
+				try {
+					const reposResponse = await fetch('https://api.github.com/user/repos?sort=stars&direction=desc&per_page=5', {
+						headers: {
+							Authorization: `token ${accessToken}`,
+							'User-Agent': 'DevNest-App',
+						},
+					});
+					if (reposResponse.ok) {
+						const reposData = await reposResponse.json();
+						if (Array.isArray(reposData)) {
+							user.pinnedRepos = reposData.map((repo) => ({
+								name: repo.name,
+								url: repo.html_url,
+								description: repo.description || '',
+								language: repo.language || '',
+							}));
+							await user.save();
+						}
+					} else {
+						console.error(`GitHub API returned status ${reposResponse.status} while fetching repos`);
+					}
+				} catch (repoError) {
+					console.error('Failed to fetch pinned repos from GitHub:', repoError);
+				}
+
 				return done(null, user);
 			} catch (error) {
 				return done(error, null);

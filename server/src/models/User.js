@@ -41,6 +41,12 @@ const userSchema = new mongoose.Schema(
 		bio: {
 			type: String,
 			default: '',
+			maxlength: 300,
+		},
+		location: {
+			type: String,
+			maxlength: 100,
+			default: '',
 		},
 		karma: {
 			type: Number,

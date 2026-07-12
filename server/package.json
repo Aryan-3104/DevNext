@@ -19,6 +19,7 @@
 		"passport": "^0.7.0",
 		"passport-github2": "^0.1.12",
 		"socket.io": "^4.8.3",
+		"socket.io-client": "^4.8.3",
 		"zod": "^4.4.3"
 	}
 }
