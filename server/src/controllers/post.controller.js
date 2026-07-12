@@ -4,6 +4,9 @@ import Community from '../models/Community.js';
 import { applyVote, currentVoteState } from '../utils/vote.js';
 import { updateHotFeed } from '../utils/updateHotFeed.js';
 import redis from '../config/redis.js';
+import { createNotification } from '../utils/createNotification.js';
+
+const MILESTONES = [10, 50, 100, 500, 1000];
 
 
 export const createPost = async (req, res, next) => {
@@ -377,12 +380,27 @@ export const voteOnPost = async (req, res, next) => {
 			console.error('Hot feed community lookup failed (non-fatal):', err.message);
 		});
 
-		return res.status(200).json({
+		const response = {
 			upvotes: updated.upvotes,
 			downvotes: updated.downvotes,
 			score: updated.score,
 			currentVote: currentVoteState(updated, req.user._id),
-		});
+		};
+
+		if (MILESTONES.includes(updated.score)) {
+			createNotification({
+				io: req.app.get('io'),
+				recipient: updated.author,
+				actor: req.user._id,
+				type: 'upvote_milestone',
+				post: updated._id,
+				comment: null,
+			}).catch((err) => {
+				console.error('Failed to create upvote_milestone notification:', err);
+			});
+		}
+
+		return res.status(200).json(response);
 	} catch (err) {
 		return next(err);
 	}

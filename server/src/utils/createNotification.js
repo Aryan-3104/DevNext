@@ -14,8 +14,7 @@ export const createNotification = async ({ io, recipient, actor, type, post, com
 		comment,
 	});
 
-	// The user model in this project uses 'avatar' instead of 'avatarUrl'
-	const populatedDoc = await newNotification.populate('actor', 'username avatar avatarUrl');
+	const populatedDoc = await newNotification.populate('actor', 'username avatar');
 
 	if (io) {
 		try {

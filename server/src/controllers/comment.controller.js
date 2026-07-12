@@ -3,6 +3,7 @@ import Comment from '../models/Comment.js';
 import Post from '../models/Post.js';
 import Community from '../models/Community.js';
 import { applyVote, currentVoteState } from '../utils/vote.js';
+import { createNotification } from '../utils/createNotification.js';
 
 /**
  * POST /api/posts/:postId/comments
@@ -86,6 +87,17 @@ export const createComment = async (req, res, next) => {
 			// Increment commentCount on post
 			await Post.updateOne({ _id: postId }, { $inc: { commentCount: 1 } });
 
+			createNotification({
+				io: req.app.get('io'),
+				recipient: parent.author,
+				actor: req.user._id,
+				type: 'comment_reply',
+				post: postId,
+				comment: newComment._id,
+			}).catch((err) => {
+				console.error('Failed to create comment_reply notification:', err);
+			});
+
 			const populated = await Comment.findById(newComment._id)
 				.populate('author', 'username avatar')
 				.populate('parentComment', '_id body author');
@@ -108,6 +120,17 @@ export const createComment = async (req, res, next) => {
 
 		// Increment commentCount on post
 		await Post.updateOne({ _id: postId }, { $inc: { commentCount: 1 } });
+
+		createNotification({
+			io: req.app.get('io'),
+			recipient: post.author,
+			actor: req.user._id,
+			type: 'post_reply',
+			post: postId,
+			comment: newComment._id,
+		}).catch((err) => {
+			console.error('Failed to create post_reply notification:', err);
+		});
 
 		const populated = await Comment.findById(newComment._id).populate(
 			'author',
